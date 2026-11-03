@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hospital OSCE Virtual Patient Simulator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+
+  <!-- 🔒 前端密碼驗證 -->
+  <script>
+    const ACCESS_PASSWORD = "doctor123"; // 可自行修改內部存取密碼
+    let userEntered = prompt("🔒 Hospital Internal System: Please enter access password:");
+    if (userEntered !== ACCESS_PASSWORD) {
+      document.body.innerHTML = "<div class='flex items-center justify-center h-screen bg-slate-900 text-red-500 font-bold text-xl'>❌ Access Denied: Incorrect Password.</div>";
+      throw new Error("Unauthorized");
+    }
+  </script>
+
+  <!-- 頂部導覽列 -->
+  <header class="bg-slate-800 border-b border-slate-700 p-4 flex justify-between items-center shadow-md">
+    <div class="flex items-center gap-2">
+      <span class="text-2xl">🏥</span>
+      <h1 class="font-bold text-lg text-blue-400">Hospital Clinical OSCE Simulator</h1>
+    </div>
+    <button id="newPatientBtn" class="bg-blue-600 hover:bg-blue-500 text-xs px-3 py-1.5 rounded text-white font-medium shadow transition">
+      🎲 New Blind Case
+    </button>
+  </header>
+
+  <!-- 主要問診區 -->
+  <main class="flex-1 max-w-4xl w-full mx-auto p-4 flex flex-col gap-4">
+
+    <!-- 狀態列 -->
+    <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex justify-between items-center shadow">
+      <div class="flex items-center gap-3">
+        <div class="h-3 w-3 rounded-full bg-emerald-500 animate-pulse"></div>
+        <span class="text-sm font-medium text-slate-300">Patient in Examination Room (Blind Mode)</span>
+      </div>
+      <div id="statusBadge" class="text-xs px-2.5 py-1 rounded bg-slate-700 text-slate-400">
+        Ready for Consultation
+      </div>
+    </div>
+
+    <!-- 語音發問按鈕 -->
+    <div class="bg-slate-800/50 rounded-xl p-6 border border-slate-700/60 flex flex-col items-center justify-center gap-4 text-center">
+      <button id="micBtn" class="w-full max-w-md bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-5 px-6 rounded-2xl shadow-lg flex items-center justify-center gap-3 text-lg transition-all transform active:scale-95">
+        <span class="text-2xl">🎤</span>
+        <span id="micBtnText">Click to Speak (Doctor / English)</span>
+      </button>
+      <p class="text-xs text-slate-400">Speak naturally in English. The patient will reply via voice automatically.</p>
+    </div>
+
+    <!-- 對話紀錄面板 -->
+    <div class="flex-1 bg-slate-800 rounded-xl border border-slate-700 flex flex-col overflow-hidden min-h-[280px]">
+      <div class="bg-slate-800/80 p-3 border-b border-slate-700 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+        Consultation Transcript
+      </div>
+      <div id="chatBox" class="flex-1 p-4 overflow-y-auto space-y-3 font-mono text-sm">
+        <div class="text-center text-slate-500 text-xs my-4">Case loaded. Begin your clinical interrogation.</div>
+      </div>
+    </div>
+
+    <!-- SOAP 筆記與完成按鈕 -->
+    <div class="bg-slate-800 rounded-xl p-4 border border-slate-700 flex flex-col gap-3">
+      <label class="text-xs font-semibold text-slate-300 uppercase">Doctor's SOAP Notes</label>
+      <textarea id="soapNotes" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-3 text-sm text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500 h-24" placeholder="Record Chief Complaint, HPI, Differential Diagnosis..."></textarea>
+      
+      <button id="finishBtn" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 rounded-lg shadow text-sm transition">
+        🏁 Finish Case & Reveal Assessment
+      </button>
+    </div>
+  </main>
+
+  <!-- OSCE 評估報告彈窗 -->
+  <div id="reportModal" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div class="bg-slate-800 border border-slate-700 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
+      <div class="bg-slate-700/50 p-4 border-b border-slate-700 flex justify-between items-center">
+        <h3 class="font-bold text-lg text-emerald-400">📊 OSCE Clinical Assessment Report</h3>
+        <button id="closeModal" class="text-slate-400 hover:text-white text-xl">✕</button>
+      </div>
+      <div id="reportContent" class="p-6 overflow-y-auto text-sm space-y-4 text-slate-200"></div>
+    </div>
+  </div>
+
+  <!-- 前端互動邏輯 -->
+  <script>
+    let recognition;
+    let isListening = false;
+    let currentCase = null;
+    let conversationHistory = [];
+
+    // 盲測病歷資料庫
+    const blindCases = [
+      {
+        id: "CASE-H01",
+        age: 42,
+        gender: "Female",
+        hiddenDiagnosis: "Acute Cholecystitis",
+        systemPrompt: "You are a 42-year-old female patient in a hospital clinic. Hidden condition: acute cholecystitis (right upper quadrant pain radiating to right shoulder, worse after fatty foods). Speak in natural, slightly distressed English. Keep answers concise (1-2 sentences, under 30 words). Never reveal your diagnosis directly."
+      },
+      {
+        id: "CASE-H02",
+        age: 58,
+        gender: "Male",
+        hiddenDiagnosis: "Spontaneous Pneumothorax",
+        systemPrompt: "You are a 58-year-old male patient. Hidden condition: spontaneous pneumothorax (sudden sharp chest pain and shortness of breath). Speak in hesitant English, short sentences. Never reveal your diagnosis."
+      }
+    ];
+
+    function initNewCase() {
+      currentCase = blindCases[Math.floor(Math.random() * blindCases.length)];
+      conversationHistory = [
+        { role: "system", content: currentCase.systemPrompt },
+        { role: "user", content: "Hello doctor." } // 啟動對話
+      ];
+      // 轉換成適用 OpenAI / 醫院 API 的格式 (role: system/user/assistant)
+      conversationHistory = [
+        { role: "system", content: currentCase.systemPrompt }
+      ];
+      document.getElementById('chatBox').innerHTML = `<div class="text-center text-slate-500 text-xs my-4">New patient entered [${currentCase.id}]. Ask your first question.</div>`;
+      document.getElementById('soapNotes').value = '';
+    }
+
+    // 語音辨識 (Speech-to-Text - English)
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.lang = 'en-US';
+      recognition.continuous = false;
+      recognition.interimResults = false;
+
+      recognition.onstart = () => {
+        isListening = true;
+        document.getElementById('micBtnText').innerText = 'Listening... Speak now';
+        document.getElementById('statusBadge').innerText = 'Listening...';
+        document.getElementById('statusBadge').className = 'text-xs px-2.5 py-1 rounded bg-red-900/60 text-red-300 border border-red-700';
+      };
+
+      recognition.onend = () => {
+        isListening = false;
+        document.getElementById('micBtnText').innerText = 'Click to Speak (Doctor / English)';
+        document.getElementById('statusBadge').innerText = 'Ready';
+        document.getElementById('statusBadge').className = 'text-xs px-2.5 py-1 rounded bg-slate-700 text-slate-400';
+      };
+
+      recognition.onresult = async (event) => {
+        const transcript = event.results[0][0].transcript;
+        appendChat('Doctor', transcript, 'user');
+        await sendToHospitalAPI(transcript);
+      };
+    } else {
+      alert("Browser does not support Web Speech API. Use Chrome.");
+    }
+
+    document.getElementById('micBtn').addEventListener('click', () => {
+      if (!isListening) recognition.start();
+      else recognition.stop();
+    });
+
+    // 呼叫 Vercel 後端中轉
+    async function sendToHospitalAPI(userMessage) {
+      conversationHistory.push({ role: "user", content: userMessage });
+
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages: conversationHistory })
+        });
+
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+
+        // 解析醫院 API 回應格式 (假設為 choices[0].message.content)
+        const replyText = data.choices[0].message.content;
+        conversationHistory.push({ role: "assistant", content: replyText });
+
+        appendChat('Patient', replyText, 'patient');
+        speakText(replyText);
+
+      } catch (err) {
+        console.error(err);
+        appendChat('System Error', err.message, 'error');
+      }
+    }
+
+    // 語音播放 (TTS)
+    function speakText(text) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'en-US';
+        utterance.rate = 1.05;
+        window.speechSynthesis.speak(utterance);
+      }
+    }
+
+    function appendChat(sender, text, type) {
+      const chatBox = document.getElementById('chatBox');
+      const div = document.createElement('div');
+      if (type === 'user') {
+        div.className = 'flex justify-end';
+        div.innerHTML = `<div class="bg-blue-600 text-white p-3 rounded-xl max-w-md shadow-sm"><span class="text-[10px] block opacity-75">👨‍⚕️ Doctor</span>${text}</div>`;
+      } else if (type === 'patient') {
+        div.className = 'flex justify-start';
+        div.innerHTML = `<div class="bg-slate-700 text-slate-100 p-3 rounded-xl max-w-md shadow-sm"><span class="text-[10px] block opacity-75 text-emerald-400">🛌 Patient</span>${text}</div>`;
+      } else {
+        div.className = 'flex justify-center';
+        div.innerHTML = `<div class="bg-red-900/50 text-red-300 p-2 rounded text-xs">${text}</div>`;
+      }
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    document.getElementById('newPatientBtn').addEventListener('click', initNewCase);
+
+    document.getElementById('finishBtn').addEventListener('click', () => {
+      const notes = document.getElementById('soapNotes').value;
+      const content = document.getElementById('reportContent');
+      content.innerHTML = `
+        <div class="p-3 bg-slate-900 rounded border border-slate-700">
+          <h4 class="font-bold text-amber-400 text-xs uppercase mb-1">🔍 Blind Case Revealed</h4>
+          <p><strong>Patient:</strong> ${currentCase.age} y/o ${currentCase.gender}</p>
+          <p><strong>True Diagnosis:</strong> <span class="text-emerald-400 font-bold">${currentCase.hiddenDiagnosis}</span></p>
+        </div>
+        <div>
+          <h4 class="font-bold text-slate-300 text-xs uppercase mb-1">📋 Your SOAP Notes:</h4>
+          <p class="italic text-slate-400 bg-slate-900/50 p-2.5 rounded">${notes || 'None recorded.'}</p>
+        </div>
+      `;
+      document.getElementById('reportModal').classList.remove('hidden');
+    });
+
+    document.getElementById('closeModal').addEventListener('click', () => {
+      document.getElementById('reportModal').classList.add('hidden');
+    });
+
+    initNewCase();
+  </script>
+</body>
+</html>
